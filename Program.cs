@@ -64,8 +64,8 @@ public enum SendARPErrorCode
 
 class MatchPair
 {
-    public string TargetMACAddress { get; set; }
-    public string[] TargetDNSList { get; set; }
+    public required string TargetMACAddress { get; set; }
+    public required string[] TargetDNSList { get; set; }
 }
 
 class Program
@@ -77,14 +77,17 @@ class Program
             .Where(ni => ni.OperationalStatus == OperationalStatus.Up && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
             .Select(ni => (
                 InterfaceIPAddress: ni.GetIPProperties().UnicastAddresses
-                    .FirstOrDefault(addr => addr.Address.AddressFamily == AddressFamily.InterNetwork)?.Address,
+                    .FirstOrDefault(addr => addr.Address.AddressFamily == AddressFamily.InterNetwork),
                 InterfacePhysicalAddress: ni.GetPhysicalAddress(),
                 GatewayIPAddress: ni.GetIPProperties().GatewayAddresses
-                    .FirstOrDefault(addr => addr.Address.AddressFamily == AddressFamily.InterNetwork)?.Address
+                    .FirstOrDefault(addr => addr.Address.AddressFamily == AddressFamily.InterNetwork)
             ))
             .Where(ni => ni.InterfaceIPAddress != null && ni.GatewayIPAddress != null)
-            .Select(ni => (ni.InterfaceIPAddress, ni.InterfacePhysicalAddress, ni.GatewayIPAddress,
-                GatewayPhysicalAddress: ConvertIPtoMAC(ni.InterfaceIPAddress, ni.GatewayIPAddress)
+            .Select(ni => (
+                ni.InterfaceIPAddress!.Address,
+                ni.InterfacePhysicalAddress, 
+                ni.GatewayIPAddress!.Address,
+                GatewayPhysicalAddress: ConvertIPtoMAC(ni.InterfaceIPAddress.Address, ni.GatewayIPAddress.Address)
             ));
     }
 
@@ -140,20 +143,29 @@ class Program
         string jsonFilePath = "rules.json";
         string jsonString = File.ReadAllText(jsonFilePath);
 
-        var rules = JsonSerializer.Deserialize<List<MatchPair>>(jsonString).ToDictionary(t => PhysicalAddress.Parse(t.TargetMACAddress), t => t.TargetDNSList);
-
-        foreach (var i in GetInterfaceAndGatewayInformation())
+        var raw_rules = JsonSerializer.Deserialize<List<MatchPair>>(jsonString);
+        if (raw_rules != null)
         {
-            Console.WriteLine(i.ToString());
-           if (rules.ContainsKey(i.GatewayPhysicalAddress))
+            var rules = raw_rules.ToDictionary(t => PhysicalAddress.Parse(t.TargetMACAddress), t => t.TargetDNSList);
+
+            var info = GetInterfaceAndGatewayInformation();
+            foreach (var i in info)
             {
-                Console.WriteLine($"{i.GatewayPhysicalAddress}: {String.Join(", ", rules[i.GatewayPhysicalAddress])}");
-                var result = SetDNS(i.InterfacePhysicalAddress, rules[i.GatewayPhysicalAddress]);
-                if (result != 0)
+                Console.WriteLine(i.ToString());
+                if (rules.TryGetValue(i.GatewayPhysicalAddress, out string[]? value))
                 {
-                    Console.WriteLine($"SetDNSServerSearchOrder failed: {Enum.GetName(typeof(SetDNSServerSearchOrderErrorCode), result)}");
+                    Console.WriteLine($"{i.GatewayPhysicalAddress}: {String.Join(", ", value)}");
+                    var result = SetDNS(i.InterfacePhysicalAddress, value);
+                    if (result != 0)
+                    {
+                        Console.WriteLine($"SetDNSServerSearchOrder failed: {Enum.GetName(typeof(SetDNSServerSearchOrderErrorCode), result)}");
+                    }
                 }
             }
+        } 
+        else
+        {
+            Console.WriteLine("Rule file is empty.");
         }
     }
 }
